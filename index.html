@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eisenhower Matrix</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase configuration and initialization
+        setLogLevel('debug');
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let userId = null;
+        let isAuthReady = false;
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+            } else {
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        userId = auth.currentUser.uid;
+                    } else {
+                        await signInAnonymously(auth);
+                        userId = auth.currentUser.uid;
+                    }
+                } catch (error) {
+                    console.error("Error signing in:", error);
+                }
+            }
+            isAuthReady = true;
+            document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+        });
+
+        // Function to open the modal
+        function openModal() {
+            document.getElementById('task-modal').classList.remove('hidden');
+        }
+
+        // Function to close the modal
+        function closeModal() {
+            document.getElementById('task-modal').classList.add('hidden');
+            document.getElementById('task-form').reset();
+            document.getElementById('task-id').value = '';
+            document.getElementById('form-title').textContent = 'Add New Task';
+            document.getElementById('submit-btn').textContent = 'Add Task';
+        }
+
+        // Function to render tasks
+        function renderTasks(tasks) {
+            const quadrantIds = ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
+            quadrantIds.forEach(id => {
+                document.getElementById(id).innerHTML = '';
+            });
+
+            tasks.forEach(task => {
+                const quadrant = `${task.urgency}-${task.importance}`;
+                const quadrantElement = document.getElementById(quadrant);
+                if (quadrantElement) {
+                    const taskElement = document.createElement('div');
+                    taskElement.className = 'bg-white p-4 rounded-xl shadow-md flex justify-between items-center mb-2 cursor-pointer';
+                    taskElement.innerHTML = `
+                        <div class="flex-grow">
+                            <h3 class="font-bold text-gray-800">${task.title}</h3>
+                            <p class="text-gray-600 text-sm">${task.description}</p>
+                        </div>
+                        <div class="flex space-x-2">
+                            <button onclick="editTask('${task.id}')" class="text-blue-500 hover:text-blue-700 transition duration-300">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                                </svg>
+                            </button>
+                            <button onclick="deleteTask('${task.id}')" class="text-red-500 hover:text-red-700 transition duration-300">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                        </div>
+                    `;
+                    quadrantElement.appendChild(taskElement);
+                }
+            });
+        }
+
+        // Add/Update task
+        document.getElementById('task-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!isAuthReady) {
+                console.error("Authentication is not ready yet.");
+                return;
+            }
+
+            const taskId = document.getElementById('task-id').value;
+            const title = document.getElementById('task-title').value;
+            const description = document.getElementById('task-description').value;
+            const urgency = document.getElementById('urgency-select').value;
+            const importance = document.getElementById('importance-select').value;
+            const taskData = { title, description, urgency, importance, userId };
+
+            try {
+                if (taskId) {
+                    await updateDoc(doc(db, `/artifacts/${appId}/users/${userId}/tasks`, taskId), taskData);
+                } else {
+                    await addDoc(collection(db, `/artifacts/${appId}/users/${userId}/tasks`), taskData);
+                }
+                closeModal();
+            } catch (error) {
+                console.error("Error adding/updating document:", error);
+            }
+        });
+
+        // Edit task
+        window.editTask = async (taskId) => {
+            if (!isAuthReady) {
+                console.error("Authentication is not ready yet.");
+                return;
+            }
+            try {
+                const taskDoc = await getDocs(query(collection(db, `/artifacts/${appId}/users/${userId}/tasks`), where('__name__', '==', taskId)));
+                if (taskDoc.docs.length > 0) {
+                    const task = { id: taskDoc.docs[0].id, ...taskDoc.docs[0].data() };
+                    document.getElementById('task-id').value = task.id;
+                    document.getElementById('task-title').value = task.title;
+                    document.getElementById('task-description').value = task.description;
+                    document.getElementById('urgency-select').value = task.urgency;
+                    document.getElementById('importance-select').value = task.importance;
+                    document.getElementById('form-title').textContent = 'Edit Task';
+                    document.getElementById('submit-btn').textContent = 'Update Task';
+                    openModal();
+                } else {
+                    console.error("Task not found.");
+                }
+            } catch (error) {
+                console.error("Error fetching task for edit:", error);
+            }
+        };
+
+        // Delete task
+        window.deleteTask = async (taskId) => {
+            if (!isAuthReady) {
+                console.error("Authentication is not ready yet.");
+                return;
+            }
+            if (window.confirm("Are you sure you want to delete this task?")) {
+                try {
+                    await deleteDoc(doc(db, `/artifacts/${appId}/users/${userId}/tasks`, taskId));
+                } catch (error) {
+                    console.error("Error removing document:", error);
+                }
+            }
+        };
+
+        // Fetch and listen for real-time updates
+        function setupRealtimeListener() {
+            if (!isAuthReady || !userId) {
+                // Wait for auth to be ready
+                setTimeout(setupRealtimeListener, 100);
+                return;
+            }
+            const tasksCollectionRef = collection(db, `/artifacts/${appId}/users/${userId}/tasks`);
+            onSnapshot(tasksCollectionRef, (querySnapshot) => {
+                const tasks = [];
+                querySnapshot.forEach((doc) => {
+                    tasks.push({ id: doc.id, ...doc.data() });
+                });
+                renderTasks(tasks);
+            });
+        }
+        setupRealtimeListener();
+
+        // Event listeners for modal
+        document.getElementById('add-task-btn').addEventListener('click', openModal);
+        document.getElementById('close-modal-btn').addEventListener('click', closeModal);
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        .shadow-quadrant {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 p-8 min-h-screen flex flex-col items-center">
+    <!-- Main UI -->
+    <div class="container mx-auto max-w-7xl flex flex-col items-center space-y-8">
+        <h1 class="text-5xl font-extrabold text-gray-900 mb-4 text-center">Eisenhower Matrix</h1>
+        <p class="text-lg text-gray-600 text-center">Organize your tasks by urgency and importance.</p>
+        <span id="user-id-display" class="text-sm text-gray-500 mb-4"></span>
+        <button id="add-task-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition duration-300 transform hover:scale-105">
+            Add New Task
+        </button>
+
+        <!-- Quadrant Grid -->
+        <div class="grid grid-cols-2 gap-8 w-full mt-8">
+            <!-- Quadrant 1: Urgent & Important (DO) -->
+            <div class="bg-red-200 p-6 rounded-2xl shadow-quadrant border-4 border-red-500">
+                <h2 class="text-2xl font-bold text-red-800 mb-4 text-center">Urgent & Important (DO)</h2>
+                <div id="urgent-important" class="space-y-4"></div>
+            </div>
+
+            <!-- Quadrant 2: Important & Not Urgent (PLAN) -->
+            <div class="bg-green-200 p-6 rounded-2xl shadow-quadrant border-4 border-green-500">
+                <h2 class="text-2xl font-bold text-green-800 mb-4 text-center">Important & Not Urgent (PLAN)</h2>
+                <div id="important-not-urgent" class="space-y-4"></div>
+            </div>
+
+            <!-- Quadrant 3: Urgent & Not Important (DELEGATE) -->
+            <div class="bg-yellow-200 p-6 rounded-2xl shadow-quadrant border-4 border-yellow-500">
+                <h2 class="text-2xl font-bold text-yellow-800 mb-4 text-center">Urgent & Not Important (DELEGATE)</h2>
+                <div id="urgent-not-important" class="space-y-4"></div>
+            </div>
+
+            <!-- Quadrant 4: Not Urgent & Not Important (ELIMINATE) -->
+            <div class="bg-gray-300 p-6 rounded-2xl shadow-quadrant border-4 border-gray-500">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center">Not Urgent & Not Important (ELIMINATE)</h2>
+                <div id="not-urgent-not-important" class="space-y-4"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for adding/editing tasks -->
+    <div id="task-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden transition-opacity duration-300 z-50">
+        <div class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md mx-4 transform transition-transform duration-300 scale-95">
+            <div class="flex justify-between items-center mb-6">
+                <h2 id="form-title" class="text-2xl font-bold text-gray-800">Add New Task</h2>
+                <button id="close-modal-btn" class="text-gray-500 hover:text-gray-800 transition duration-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <form id="task-form" class="space-y-4">
+                <input type="hidden" id="task-id">
+                <div>
+                    <label for="task-title" class="block text-sm font-medium text-gray-700">Task Title</label>
+                    <input type="text" id="task-title" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2">
+                </div>
+                <div>
+                    <label for="task-description" class="block text-sm font-medium text-gray-700">Description</label>
+                    <textarea id="task-description" rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2"></textarea>
+                </div>
+                <div>
+                    <label for="urgency-select" class="block text-sm font-medium text-gray-700">Urgency</label>
+                    <select id="urgency-select" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2">
+                        <option value="urgent">Urgent</option>
+                        <option value="not-urgent">Not Urgent</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="importance-select" class="block text-sm font-medium text-gray-700">Importance</label>
+                    <select id="importance-select" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2">
+                        <option value="important">Important</option>
+                        <option value="not-important">Not Important</option>
+                    </select>
+                </div>
+                <button type="submit" id="submit-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300">
+                    Add Task
+                </button>
+            </form>
+        </div>
+    </div>
+</body>
+
+</html>
